@@ -1,5 +1,4 @@
 # ── Imagen base ───────────────────────────────────────────────────────────────
-# python:3.11-slim reduce tamaño vs full python image (~200MB menos)
 FROM python:3.11-slim
 
 # ── Variables de entorno ───────────────────────────────────────────────────────
@@ -9,8 +8,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 # ── Dependencias del sistema ───────────────────────────────────────────────────
-# ffmpeg: conversión de video a H.264
-# libgl1: requerido por OpenCV headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libgl1 \
@@ -21,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── Instalar dependencias Python ───────────────────────────────────────────────
-# Copiar requirements primero para aprovechar cache de Docker
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
@@ -38,7 +34,6 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 # ── Expose y comando ───────────────────────────────────────────────────────────
-EXPOSE 8000
-
-# Render inyecta $PORT — uvicorn lo lee de config.py
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# FIX: usar $PORT que Render inyecta dinámicamente (no hardcodear 8000)
+EXPOSE $PORT
+CMD sh -c "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"

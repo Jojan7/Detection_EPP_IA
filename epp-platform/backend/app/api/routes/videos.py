@@ -12,9 +12,9 @@ GET /detect/video/{job_id}/download
 """
 
 import logging
-import uuid
+import os
 
-from fastapi import APIRouter, BackgroundTasks, File, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from app.api.routes.images import _build_compliance_schema
@@ -38,6 +38,7 @@ router = APIRouter(prefix="/detect", tags=["Detection"])
     ),
 )
 async def detect_video(
+    request:          Request,
     background_tasks: BackgroundTasks,
     file:         UploadFile = File(..., description="Video a analizar"),
     frame_skip:   int        = Query(
@@ -61,8 +62,11 @@ async def detect_video(
         # 3. Serializar compliance del video completo
         compliance_schema = _build_compliance_schema(result.compliance)
 
-        # 4. URL de descarga del video resultante
-        download_url = f"/detect/video/{result.job_id}/download"
+        # FIX: URL absoluta usando el host real del request
+        # En Render: https://detection-epp-ia.onrender.com/detect/video/{id}/download
+        # En local:  http://localhost:8000/detect/video/{id}/download
+        base_url = str(request.base_url).rstrip("/")
+        download_url = f"{base_url}/detect/video/{result.job_id}/download"
 
         return VideoDetectionResponse(
             job_id=result.job_id,
@@ -112,8 +116,6 @@ async def download_video(
             ),
         )
 
-    # Programar eliminación del archivo DESPUÉS de enviarlo
-    # BackgroundTask garantiza que se ejecuta tras completar el response
     background_tasks.add_task(cleanup_temp_file, output_path)
 
     return FileResponse(
@@ -122,3 +124,4 @@ async def download_video(
         filename=f"epp_resultado_{job_id}.mp4",
         headers={"Content-Disposition": f'attachment; filename="epp_resultado_{job_id}.mp4"'},
     )
+

@@ -1,13 +1,5 @@
 """
 main.py — Entry point de la aplicación FastAPI EPP AI.
-
-Configura:
-- Instancia FastAPI con metadata
-- CORS para el frontend Next.js
-- Eventos de startup/shutdown (carga/descarga del modelo)
-- Registro de todos los routers
-- Endpoints de health y modelo
-- Manejo global de errores
 """
 
 import logging
@@ -70,23 +62,23 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     """
-    Al arrancar:
-    1. Valida configuración (modelo existe, directorios accesibles)
-    2. Carga el modelo YOLO en memoria (una sola vez)
+    FIX Render: validate_config() y model_manager.load() arrancan el modelo
+    en background. El puerto queda abierto de inmediato para que Render
+    no haga timeout en el port scan.
     """
     logger.info(f"Iniciando EPP AI API | Entorno: {ENVIRONMENT}")
     try:
         validate_config()
+        # load() ahora es no-bloqueante — lanza un thread y retorna al instante
         model_manager.load()
-        logger.info("✅ API lista para recibir requests")
+        logger.info("✅ API lista para recibir requests (modelo cargando en background)")
     except Exception as e:
         logger.critical(f"❌ Fallo en startup: {e}")
-        sys.exit(1)  # Render detecta exit code != 0 y reinicia el servicio
+        sys.exit(1)
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    """Al apagar: liberar modelo de memoria limpiamente."""
     logger.info("Apagando servidor...")
     model_manager.unload()
 
@@ -123,7 +115,7 @@ app.include_router(stream.router)
     response_model=HealthResponse,
     tags=["System"],
     summary="Health check",
-    description="Verifica que el servidor y el modelo estén operativos. Usado por Render.",
+    description="Verifica que el servidor y el modelo estén operativos.",
 )
 async def health():
     info = model_manager.health()

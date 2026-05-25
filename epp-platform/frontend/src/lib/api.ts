@@ -3,7 +3,10 @@
 import axios from "axios"
 import type { ImageDetectionResult, VideoDetectionResult } from "@/types/epp"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+// FIX: leer la URL del backend desde variable de entorno (configurada en Render/Vercel)
+// En local usa el fallback http://localhost:8000
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 // Instancia base con timeout razonable para CPU (Render)
 const http = axios.create({
@@ -70,7 +73,6 @@ export const api = {
         headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (e) => {
           if (onProgress && e.total) {
-            // Upload es ~30% del tiempo total, processing es el resto
             onProgress(Math.round((e.loaded / e.total) * 30))
           }
         },
@@ -79,7 +81,10 @@ export const api = {
     return data
   },
 
-  /** URL de descarga del video procesado. */
+  /**
+   * URL de descarga del video procesado.
+   * FIX: URL absoluta con el dominio del backend para que funcione desde el frontend en producción
+   */
   getDownloadUrl(jobId: string): string {
     return `${API_URL}/detect/video/${jobId}/download`
   },
@@ -93,8 +98,19 @@ export const api = {
 
 // ── WebSocket helper ──────────────────────────────────────────────────────────
 
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"
+// FIX: construir WS_URL a partir de NEXT_PUBLIC_API_URL si no se define explícitamente
+// Convierte https://... → wss://... y http://... → ws://...
+function buildWsUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL
+  }
+  // Derivar del API_URL automáticamente
+  return API_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://")
+}
+
+export const WS_URL = buildWsUrl()
 
 export function createStreamSocket(): WebSocket {
   return new WebSocket(`${WS_URL}/ws/stream`)
 }
+

@@ -4,11 +4,12 @@ model_manager.py — Gestión del ciclo de vida del modelo YOLOv8.
 Implementa el patrón Singleton para garantizar que el modelo se cargue
 UNA SOLA VEZ al arrancar el servidor y se reutilice en cada request.
 
-Crítico para Render: cargar YOLO en cada request consumiría ~300MB por
-request y colapsaría el servidor en segundos.
+FIX Render: la carga se hace en un thread background para que uvicorn
+abra el puerto inmediatamente y no haga timeout en el port scan.
 """
 
 import logging
+import threading
 import time
 from threading import Lock
 
@@ -44,37 +45,47 @@ class ModelManager:
         self._model: YOLO | None = None
         self._load_time_ms: float = 0.0
         self._is_ready: bool = False
+        self._load_error: str | None = None
         self._initialized = True
+
+    def _load_in_background(self) -> None:
+        """Carga el modelo en un thread separado para no bloquear el startup."""
+        try:
+            logger.info(f"[background] Cargando modelo YOLO desde: {MODEL_PATH}")
+            t0 = time.perf_counter()
+
+            self._model = YOLO(str(MODEL_PATH))
+
+            # Warm-up: una inferencia dummy para que torch compile sus kernels
+            import numpy as np
+            dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+            self._model(dummy, verbose=False)
+
+            self._load_time_ms = (time.perf_counter() - t0) * 1000
+            self._is_ready = True
+
+            class_count = len(self._model.names)
+            logger.info(
+                f"[background] ✅ Modelo listo en {self._load_time_ms:.0f}ms | "
+                f"{class_count} clases | "
+                f"confianza={MODEL_CONFIDENCE} | iou={MODEL_IOU}"
+            )
+        except Exception as e:
+            self._load_error = str(e)
+            logger.critical(f"[background] ❌ Error cargando modelo: {e}")
 
     def load(self) -> None:
         """
-        Carga el modelo desde disco. Llamar una sola vez en el startup de FastAPI.
-        Lanza RuntimeError si el archivo no existe o el modelo es inválido.
+        Inicia la carga del modelo en un thread background.
+        Retorna inmediatamente para que uvicorn pueda abrir el puerto.
         """
         if self._is_ready:
             logger.info("Modelo ya cargado, ignorando llamada duplicada.")
             return
 
-        logger.info(f"Cargando modelo YOLO desde: {MODEL_PATH}")
-        t0 = time.perf_counter()
-
-        self._model = YOLO(str(MODEL_PATH))
-
-        # Warm-up: una inferencia dummy para que torch compile sus kernels
-        # Evita que el PRIMER request real sea lento
-        import numpy as np
-        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-        self._model(dummy, verbose=False)
-
-        self._load_time_ms = (time.perf_counter() - t0) * 1000
-        self._is_ready = True
-
-        class_count = len(self._model.names)
-        logger.info(
-            f"Modelo listo en {self._load_time_ms:.0f}ms | "
-            f"{class_count} clases | "
-            f"confianza={MODEL_CONFIDENCE} | iou={MODEL_IOU}"
-        )
+        thread = threading.Thread(target=self._load_in_background, daemon=True)
+        thread.start()
+        logger.info("✅ Servidor listo — modelo cargando en background...")
 
     def unload(self) -> None:
         """Libera el modelo de memoria. Llamar en el shutdown de FastAPI."""
@@ -87,13 +98,14 @@ class ModelManager:
     @property
     def model(self) -> YOLO:
         """
-        Acceso al modelo. Lanza RuntimeError si no está cargado.
-        Usar siempre este property, nunca _model directamente.
+        Acceso al modelo. Lanza RuntimeError si no está listo aún.
         """
         if not self._is_ready or self._model is None:
+            if self._load_error:
+                raise RuntimeError(f"Error al cargar el modelo: {self._load_error}")
             raise RuntimeError(
-                "El modelo no está cargado. "
-                "¿Se llamó ModelManager().load() en el startup?"
+                "El modelo aún se está cargando. "
+                "Espera unos segundos y vuelve a intentarlo."
             )
         return self._model
 
@@ -107,7 +119,6 @@ class ModelManager:
 
     @property
     def class_names(self) -> dict[int, str]:
-        """Devuelve el diccionario id->nombre de clases del modelo."""
         return self.model.names
 
     def predict(
@@ -120,7 +131,6 @@ class ModelManager:
     ):
         """
         Wrapper de inferencia con parámetros por defecto del proyecto.
-        Centraliza todos los calls a YOLO para facilitar logging y métricas.
         """
         return self.model(
             source,
@@ -136,6 +146,7 @@ class ModelManager:
             "model_ready": self._is_ready,
             "model_path": str(MODEL_PATH),
             "load_time_ms": round(self._load_time_ms, 1),
+            "load_error": self._load_error,
             "class_count": len(self._model.names) if self._is_ready else 0,
             "classes": list(self._model.names.values()) if self._is_ready else [],
         }

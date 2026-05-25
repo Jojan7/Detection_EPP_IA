@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Requerido para Docker — genera carpeta .next/standalone
+  output: "standalone",
+
   // La API corre en Render — el dominio real va en env var
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
