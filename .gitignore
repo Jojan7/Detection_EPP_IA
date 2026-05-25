@@ -4,4 +4,7 @@ __pycache__
 runs
 *.avi
 temp
-.env
+.envnode_modules/
+epp-platform/frontend/node_modules/
+epp-platform/backend/temp/
+epp-platform/frontend/.next/
