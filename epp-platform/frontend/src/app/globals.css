@@ -1,0 +1,163 @@
+/* globals.css — Sistema de diseño industrial-futurista EPP AI */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Variables CSS ─────────────────────────────────────────── */
+:root {
+  --neon:       #00ff88;
+  --neon-dim:   #00cc6a;
+  --danger:     #ff3355;
+  --warn:       #ffaa00;
+  --void:       #020407;
+  --surface:    #080e12;
+  --panel:      #0d1a20;
+  --card:       #0f2028;
+  --border:     #1a3040;
+  --text-primary:   #e8f4f8;
+  --text-secondary: #7a9aaa;
+}
+
+/* ── Reset base ────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--void);
+  color: var(--text-primary);
+  font-family: 'Syne', sans-serif;
+  overflow-x: hidden;
+}
+
+/* ── Grid de fondo ─────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0,255,136,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,136,0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+  animation: grid-glow 6s ease-in-out infinite;
+}
+
+/* ── Scan line decorativa ──────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0,255,136,0.15), transparent);
+  animation: scan-line 10s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── Scrollbar custom ──────────────────────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: #2a4a60; }
+
+/* ── Componentes reutilizables ─────────────────────────────── */
+@layer components {
+
+  /* Glass panel */
+  .glass {
+    background: rgba(13, 26, 32, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(26, 48, 64, 0.8);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+
+  /* Glass con borde neon */
+  .glass-neon {
+    background: rgba(13, 26, 32, 0.7);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(0,255,136,0.25);
+    box-shadow: 0 0 20px rgba(0,255,136,0.08), inset 0 1px 0 rgba(0,255,136,0.05);
+  }
+
+  /* Glass con borde peligro */
+  .glass-danger {
+    background: rgba(13, 26, 32, 0.7);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,51,85,0.25);
+    box-shadow: 0 0 20px rgba(255,51,85,0.08), inset 0 1px 0 rgba(255,51,85,0.05);
+  }
+
+  /* Botón primario */
+  .btn-primary {
+    @apply relative px-6 py-3 font-display font-semibold text-sm tracking-wider
+           bg-neon text-void rounded-sm overflow-hidden
+           transition-all duration-200
+           hover:bg-neon-dim hover:shadow-neon-md
+           active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none;
+  }
+
+  /* Botón outline */
+  .btn-outline {
+    @apply px-6 py-3 font-display font-semibold text-sm tracking-wider
+           border border-border text-text-secondary rounded-sm
+           transition-all duration-200
+           hover:border-border-bright hover:text-text-primary
+           active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Etiqueta monoespaceada para datos */
+  .data-label {
+    @apply font-mono text-xs text-text-muted tracking-widest uppercase;
+  }
+
+  /* Valor de dato grande */
+  .data-value {
+    @apply font-mono text-2xl font-bold text-text-primary;
+  }
+
+  /* Badge de estado */
+  .badge-neon    { @apply px-2 py-0.5 text-xs font-mono bg-neon-dark text-neon border border-neon/30 rounded-sm; }
+  .badge-danger  { @apply px-2 py-0.5 text-xs font-mono bg-danger-dark text-danger border border-danger/30 rounded-sm; }
+  .badge-warn    { @apply px-2 py-0.5 text-xs font-mono bg-warn-dark text-warn border border-warn/30 rounded-sm; }
+  .badge-neutral { @apply px-2 py-0.5 text-xs font-mono bg-panel text-text-secondary border border-border rounded-sm; }
+
+  /* Línea divisoria con glow */
+  .divider {
+    @apply border-t border-border/60;
+  }
+
+  /* Texto con glow neon */
+  .text-glow-neon {
+    text-shadow: 0 0 20px rgba(0,255,136,0.5), 0 0 40px rgba(0,255,136,0.2);
+  }
+
+  /* Texto con glow peligro */
+  .text-glow-danger {
+    text-shadow: 0 0 20px rgba(255,51,85,0.5), 0 0 40px rgba(255,51,85,0.2);
+  }
+}
+
+/* ── Animaciones de entrada ────────────────────────────────── */
+.animate-in {
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.animate-in-delay-1 { animation-delay: 0.1s; opacity: 0; animation: fade-in-up 0.5s ease-out 0.1s forwards; }
+.animate-in-delay-2 { animation-delay: 0.2s; opacity: 0; animation: fade-in-up 0.5s ease-out 0.2s forwards; }
+.animate-in-delay-3 { animation-delay: 0.3s; opacity: 0; animation: fade-in-up 0.5s ease-out 0.3s forwards; }
+.animate-in-delay-4 { animation-delay: 0.4s; opacity: 0; animation: fade-in-up 0.5s ease-out 0.4s forwards; }

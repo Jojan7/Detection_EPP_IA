@@ -1,0 +1,19 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12      # requerido por FastAPI para File uploads
+pydantic==2.10.3
+
+# ── AI / Vision ───────────────────────────────────────────────────────────────
+# torch CPU-only: ~800MB menos que la versión GPU — crítico para Render free
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+ultralytics==8.3.50           # YOLOv8 — versión usada en el notebook
+opencv-python-headless==4.10.0.84  # headless: sin GUI, más liviano
+numpy==1.26.4
+Pillow==11.0.0
+
+# ── Utils ──────────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1          # leer .env en desarrollo local

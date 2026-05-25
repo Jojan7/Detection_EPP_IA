@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+
+  # ── Backend FastAPI ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # En desarrollo: montar código para hot-reload
+      - ./backend/app:/app/app
+      - ./backend/models:/app/models
+      - ./backend/temp:/app/temp
+    environment:
+      - ENVIRONMENT=development
+      - ALLOWED_ORIGINS=http://localhost:3000
+      - MODEL_FILENAME=best.pt
+      - MODEL_CONFIDENCE=0.45
+      - MODEL_IOU=0.45
+      - VIDEO_FRAME_SKIP=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s   # el modelo tarda en cargar
+
+  # ── Frontend Next.js ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
+        - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
