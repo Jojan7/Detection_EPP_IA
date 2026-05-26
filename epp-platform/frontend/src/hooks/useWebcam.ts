@@ -4,41 +4,44 @@ import { useRef, useState, useCallback, useEffect } from "react"
 import { createStreamSocket } from "@/lib/api"
 import type { StreamFrame } from "@/types/epp"
 
-export type WebcamStatus = "idle" | "starting" | "streaming" | "paused" | "error"
+export type VideoStreamStatus = "idle" | "processing" | "paused" | "done" | "error"
 
-interface UseWebcamReturn {
+interface UseVideoStreamReturn {
   videoRef:        React.RefObject<HTMLVideoElement>
   canvasRef:       React.RefObject<HTMLCanvasElement>
-  status:          WebcamStatus
+  status:          VideoStreamStatus
   latestFrame:     StreamFrame | null
+  progress:        number   // 0-100
+  framesProcessed: number
   fps:             number
   error:           string | null
-  start:           () => Promise<void>
+  start:           (file: File) => Promise<void>
   stop:            () => void
   pause:           () => void
   resume:          () => void
 }
 
-// Intervalo entre capturas: 100ms = máximo 10fps al servidor
-// El servidor procesa ~6-8fps en CPU — no saturar con más frames
-const CAPTURE_INTERVAL_MS = 100
-const JPEG_QUALITY        = 0.75
+// Intervalo entre frames enviados al servidor (ms)
+// 150ms = ~6fps — balance entre velocidad y no saturar CPU del servidor
+const FRAME_INTERVAL_MS = 150
+const JPEG_QUALITY      = 0.75
 
-export function useWebcam(): UseWebcamReturn {
+export function useVideoStream(): UseVideoStreamReturn {
   const videoRef    = useRef<HTMLVideoElement>(null)
   const canvasRef   = useRef<HTMLCanvasElement>(null)
   const socketRef   = useRef<WebSocket | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
-  const streamRef   = useRef<MediaStream | null>(null)
 
-  const [status,      setStatus]      = useState<WebcamStatus>("idle")
-  const [latestFrame, setLatestFrame] = useState<StreamFrame | null>(null)
-  const [error,       setError]       = useState<string | null>(null)
-  const [fps,         setFps]         = useState(0)
+  const [status,          setStatus]          = useState<VideoStreamStatus>("idle")
+  const [latestFrame,     setLatestFrame]     = useState<StreamFrame | null>(null)
+  const [progress,        setProgress]        = useState(0)
+  const [framesProcessed, setFramesProcessed] = useState(0)
+  const [fps,             setFps]             = useState(0)
+  const [error,           setError]           = useState<string | null>(null)
 
-  // Contador FPS
-  const fpsCountRef  = useRef(0)
-  const fpsTimerRef  = useRef<NodeJS.Timeout | null>(null)
+  const fpsCountRef = useRef(0)
+  const fpsTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const frameCountRef = useRef(0)
 
   const startFpsCounter = () => {
     fpsTimerRef.current = setInterval(() => {
@@ -61,20 +64,34 @@ export function useWebcam(): UseWebcamReturn {
     if (!video || !canvas || !socket || socket.readyState !== WebSocket.OPEN) return
     if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
 
+    // Si el video terminó, detener
+    if (video.ended || video.currentTime >= video.duration) {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      stopFpsCounter()
+      setStatus("done")
+      return
+    }
+
+    // Actualizar progreso basado en tiempo del video
+    const pct = video.duration > 0
+      ? Math.round((video.currentTime / video.duration) * 100)
+      : 0
+    setProgress(pct)
+
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    // Dibujar frame actual en canvas oculto
     canvas.width  = video.videoWidth  || 640
     canvas.height = video.videoHeight || 480
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-    // Convertir a JPEG y enviar como Blob→ArrayBuffer
     canvas.toBlob(
       (blob) => {
         if (!blob || socketRef.current?.readyState !== WebSocket.OPEN) return
         blob.arrayBuffer().then((buf) => {
           socketRef.current?.send(buf)
+          frameCountRef.current++
+          setFramesProcessed(frameCountRef.current)
         })
       },
       "image/jpeg",
@@ -82,40 +99,62 @@ export function useWebcam(): UseWebcamReturn {
     )
   }, [])
 
-  const start = useCallback(async () => {
-    setStatus("starting")
-    setError(null)
+  const stop = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current)
+    stopFpsCounter()
 
-    // 1. Solicitar acceso a la cámara
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
-        audio: false,
-      })
-      streamRef.current = stream
-    } catch (e: any) {
-      setError("No se pudo acceder a la cámara. Verifica los permisos.")
-      setStatus("error")
-      return
+    if (socketRef.current) {
+      socketRef.current.onclose = null
+      socketRef.current.close()
+      socketRef.current = null
     }
 
-    // 2. Conectar video element al stream
     if (videoRef.current) {
-      videoRef.current.srcObject = stream
-      await videoRef.current.play()
+      videoRef.current.pause()
+      videoRef.current.src = ""
     }
 
-    // 3. Abrir WebSocket
+    setStatus("idle")
+    setLatestFrame(null)
+    setProgress(0)
+    setFramesProcessed(0)
+    frameCountRef.current = 0
+  }, [])
+
+  const start = useCallback(async (file: File) => {
+    setStatus("processing")
+    setError(null)
+    setLatestFrame(null)
+    setProgress(0)
+    setFramesProcessed(0)
+    frameCountRef.current = 0
+
+    // 1. Cargar video en el elemento <video>
+    const video = videoRef.current
+    if (!video) return
+
+    const url = URL.createObjectURL(file)
+    video.src = url
+    video.muted = true
+
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve()
+      video.onerror = () => reject(new Error("No se pudo cargar el video"))
+    })
+
+    // 2. Abrir WebSocket
     const socket = createStreamSocket()
     socketRef.current = socket
 
-    socket.onopen = () => {
-      setStatus("streaming")
-      startFpsCounter()
-      // Iniciar captura periódica
-      intervalRef.current = setInterval(captureAndSend, CAPTURE_INTERVAL_MS)
-    }
+    await new Promise<void>((resolve, reject) => {
+      socket.onopen = () => resolve()
+      socket.onerror = () => reject(new Error("No se pudo conectar al servidor"))
+    })
+
+    // 3. Reproducir video y empezar a capturar frames
+    video.play()
+    startFpsCounter()
+    intervalRef.current = setInterval(captureAndSend, FRAME_INTERVAL_MS)
 
     socket.onmessage = (event) => {
       try {
@@ -128,44 +167,29 @@ export function useWebcam(): UseWebcamReturn {
     }
 
     socket.onerror = () => {
-      setError("Error de conexión WebSocket. Verifica que el servidor esté activo.")
+      setError("Error de conexión WebSocket.")
       setStatus("error")
       stop()
     }
 
     socket.onclose = () => {
-      if (status === "streaming") {
-        setStatus("idle")
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureAndSend])
-
-  const stop = useCallback(() => {
-    // Detener captura
-    if (intervalRef.current) clearInterval(intervalRef.current)
-    stopFpsCounter()
-
-    // Cerrar WebSocket
-    if (socketRef.current) {
-      socketRef.current.onclose = null  // evitar callback al cerrar manualmente
-      socketRef.current.close()
-      socketRef.current = null
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      stopFpsCounter()
     }
 
-    // Detener stream de cámara
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
+    // Cuando el video termina
+    video.onended = () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      stopFpsCounter()
+      setProgress(100)
+      setStatus("done")
+      URL.revokeObjectURL(url)
     }
 
-    if (videoRef.current) videoRef.current.srcObject = null
-
-    setStatus("idle")
-    setLatestFrame(null)
-  }, [])
+  }, [captureAndSend, stop])
 
   const pause = useCallback(() => {
+    videoRef.current?.pause()
     if (intervalRef.current) clearInterval(intervalRef.current)
     stopFpsCounter()
     setStatus("paused")
@@ -173,20 +197,20 @@ export function useWebcam(): UseWebcamReturn {
 
   const resume = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
-      intervalRef.current = setInterval(captureAndSend, CAPTURE_INTERVAL_MS)
+      videoRef.current?.play()
+      intervalRef.current = setInterval(captureAndSend, FRAME_INTERVAL_MS)
       startFpsCounter()
-      setStatus("streaming")
+      setStatus("processing")
     }
   }, [captureAndSend])
 
-  // Cleanup al desmontar
   useEffect(() => {
     return () => { stop() }
   }, [stop])
 
   return {
     videoRef, canvasRef,
-    status, latestFrame, fps, error,
+    status, latestFrame, progress, framesProcessed, fps, error,
     start, stop, pause, resume,
   }
 }

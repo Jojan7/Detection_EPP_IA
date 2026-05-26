@@ -1,40 +1,44 @@
 "use client"
 
-import { useState, useCallback, useRef, useEffect } from "react"
+import { useState, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
-  Video, Zap, Download, RotateCcw,
-  Clock, Film, Gauge, ChevronDown, ChevronUp, Loader2
+  Video, Play, Square, Pause, RefreshCw,
+  Activity, Loader2, RotateCcw
 } from "lucide-react"
+import { useVideoStream } from "@/hooks/useVideoStream"
 import { api } from "@/lib/api"
-import type { VideoDetectionResult, JobStatus } from "@/types/epp"
-import { UploadZone }      from "@/components/ui/UploadZone"
-import { ComplianceCard }  from "@/components/ui/ComplianceCard"
-import { ProcessingState } from "@/components/ui/ProcessingState"
-import { formatDuration }  from "@/lib/utils"
+import { ComplianceCard } from "@/components/ui/ComplianceCard"
+import { cn } from "@/lib/utils"
 
-const PROGRESS_MESSAGES = [
-  "Analizando frames...",
-  "Ejecutando inferencia YOLOv8...",
-  "Detectando elementos EPP...",
-  "Verificando cumplimiento normativa...",
-  "Generando video anotado...",
-  "Convirtiendo a H.264...",
-]
+const STATUS_LABELS: Record<string, string> = {
+  idle:       "INACTIVO",
+  processing: "PROCESANDO",
+  paused:     "PAUSADO",
+  done:       "COMPLETADO",
+  error:      "ERROR",
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  idle:       "text-text-muted",
+  processing: "text-neon",
+  paused:     "text-warn",
+  done:       "text-neon",
+  error:      "text-danger",
+}
 
 export default function VideoPage() {
   const [file,          setFile]          = useState<File | null>(null)
-  const [status,        setStatus]        = useState<JobStatus>("idle")
-  const [result,        setResult]        = useState<VideoDetectionResult | null>(null)
-  const [error,         setError]         = useState<string | null>(null)
-  const [progress,      setProgress]      = useState(0)
-  const [msgIndex,      setMsgIndex]      = useState(0)
-  const [frameSkip,     setFrameSkip]     = useState(4)   // FIX: default 4 para reducir tiempo
-  const [showConfig,    setShowConfig]    = useState(false)
   const [modelReady,    setModelReady]    = useState(false)
   const [modelChecking, setModelChecking] = useState(true)
-  const msgInterval    = useRef<NodeJS.Timeout | null>(null)
   const healthInterval = useRef<NodeJS.Timeout | null>(null)
+  const fileInputRef   = useRef<HTMLInputElement>(null)
+
+  const {
+    videoRef, canvasRef,
+    status, latestFrame, progress, framesProcessed, fps, error,
+    start, stop, pause, resume,
+  } = useVideoStream()
 
   useEffect(() => {
     const checkHealth = async () => {
@@ -45,76 +49,36 @@ export default function VideoPage() {
           setModelChecking(false)
           if (healthInterval.current) clearInterval(healthInterval.current)
         }
-      } catch {
-        // backend aún no responde, seguir intentando
-      }
+      } catch { /* seguir intentando */ }
     }
-
     checkHealth()
     healthInterval.current = setInterval(checkHealth, 5000)
-
-    return () => {
-      if (healthInterval.current) clearInterval(healthInterval.current)
-    }
+    return () => { if (healthInterval.current) clearInterval(healthInterval.current) }
   }, [])
 
-  const handleFile = useCallback((f: File) => {
-    setFile(f)
-    setResult(null)
-    setError(null)
-    setStatus("idle")
-  }, [])
-
-  const startProgressMessages = () => {
-    let i = 0
-    msgInterval.current = setInterval(() => {
-      i = (i + 1) % PROGRESS_MESSAGES.length
-      setMsgIndex(i)
-    }, 3500)
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (f) setFile(f)
   }
 
-  const stopProgressMessages = () => {
-    if (msgInterval.current) clearInterval(msgInterval.current)
-  }
-
-  const handleDetect = async () => {
+  const handleStart = async () => {
     if (!file) return
-    setStatus("processing")
-    setError(null)
-    setProgress(0)
-    setMsgIndex(0)
-    startProgressMessages()
-
-    try {
-      const res = await api.detectVideo(file, frameSkip, (pct) => {
-        setProgress(pct)
-      })
-      stopProgressMessages()
-      setResult(res)
-      setStatus("done")
-    } catch (e: any) {
-      stopProgressMessages()
-      setError(e.message)
-      setStatus("error")
-    }
+    await start(file)
   }
 
   const handleReset = () => {
-    stopProgressMessages()
+    stop()
     setFile(null)
-    setResult(null)
-    setError(null)
-    setStatus("idle")
-    setProgress(0)
-    setMsgIndex(0)
+    if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
+  const isActive     = status === "processing" || status === "paused"
   const isProcessing = status === "processing"
+  const isDone       = status === "done"
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10">
 
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
@@ -130,11 +94,11 @@ export default function VideoPage() {
           Análisis EPP — Video
         </h1>
         <p className="font-body text-sm text-text-secondary mt-1">
-          Procesa un video completo. Cada frame es analizado y el video anotado queda disponible para descarga.
+          Sube un video y analiza cada frame en tiempo real via WebSocket.
+          Los resultados EPP se muestran mientras se reproduce.
         </p>
       </motion.div>
 
-      {/* Banner: modelo cargando */}
       <AnimatePresence>
         {modelChecking && !modelReady && (
           <motion.div
@@ -145,129 +109,173 @@ export default function VideoPage() {
           >
             <Loader2 className="w-4 h-4 text-warn animate-spin flex-shrink-0" />
             <p className="font-mono text-xs text-warn">
-              El modelo de IA está cargando en el servidor — esto toma ~60-90 segundos la primera vez.
-              El botón se habilitará automáticamente cuando esté listo.
+              El modelo de IA está cargando — el botón se habilitará automáticamente.
             </p>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Banner: limitación plan gratuito */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="mb-6 glass rounded-sm px-4 py-3 flex items-center gap-3 border border-border/40"
-      >
-        <Clock className="w-4 h-4 text-text-muted flex-shrink-0" />
-        <p className="font-mono text-xs text-text-muted">
-          Plan gratuito: videos cortos recomendados (&lt;30 segundos). Usa frame skip 4-5 para videos más largos.
-        </p>
-      </motion.div>
+      <div className="grid lg:grid-cols-[1fr_380px] gap-6">
 
-      <div className="grid lg:grid-cols-2 gap-6">
-
-        {/* Columna izquierda */}
         <div className="space-y-4">
 
-          {/* Upload */}
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-            <UploadZone
-              accept="video"
-              onFile={handleFile}
-              disabled={isProcessing}
-              className="min-h-[220px]"
-            />
-          </motion.div>
+          <div className="glass rounded-sm overflow-hidden relative">
 
-          {/* Config colapsable */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.15 }}
-            className="glass rounded-sm overflow-hidden"
-          >
-            <button
-              onClick={() => setShowConfig(!showConfig)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left"
-            >
+            <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-2
+                            bg-gradient-to-b from-void/80 to-transparent pointer-events-none">
               <div className="flex items-center gap-2">
-                <Gauge className="w-4 h-4 text-text-muted" />
-                <span className="font-display text-sm text-text-secondary">
-                  Configuración de procesamiento
+                <span className={cn(
+                  "w-2 h-2 rounded-full flex-shrink-0",
+                  isProcessing      ? "bg-neon animate-pulse" :
+                  status === "paused" ? "bg-warn" :
+                  isDone            ? "bg-neon" :
+                  "bg-text-muted"
+                )} />
+                <span className={cn("font-mono text-xs", STATUS_COLORS[status])}>
+                  {STATUS_LABELS[status]}
                 </span>
               </div>
-              {showConfig
-                ? <ChevronUp   className="w-4 h-4 text-text-muted" />
-                : <ChevronDown className="w-4 h-4 text-text-muted" />
-              }
-            </button>
 
-            <AnimatePresence>
-              {showConfig && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="overflow-hidden"
-                >
-                  <div className="px-4 pb-4 pt-1 border-t border-border/40 space-y-4">
-                    <div>
-                      <div className="flex justify-between items-center mb-2">
-                        <label className="font-display text-sm text-text-secondary">
-                          Frame skip
-                        </label>
-                        <span className="font-mono text-sm text-neon">1 de cada {frameSkip}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={1} max={5}
-                        value={frameSkip}
-                        disabled={isProcessing}
-                        onChange={(e) => setFrameSkip(Number(e.target.value))}
-                        className="w-full accent-[#00ff88] cursor-pointer disabled:opacity-50"
-                      />
-                      <div className="flex justify-between mt-1">
-                        <span className="font-mono text-xs text-text-muted">Máxima precisión</span>
-                        <span className="font-mono text-xs text-text-muted">Máxima velocidad</span>
-                      </div>
-                    </div>
-
-                    <div className="bg-panel rounded-sm px-3 py-2 flex items-center gap-2">
-                      <Clock className="w-3.5 h-3.5 text-warn flex-shrink-0" />
-                      <p className="font-mono text-xs text-text-secondary">
-                        En plan gratuito usa frame skip 4-5 y videos cortos (&lt;30s).
-                        Frame skip 4 es el mejor balance para CPU limitado.
-                      </p>
-                    </div>
+              {isActive && (
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <Activity className="w-3 h-3 text-neon" />
+                    <span className="font-mono text-xs text-neon">{fps} FPS</span>
                   </div>
-                </motion.div>
+                  <span className="font-mono text-xs text-text-muted">
+                    {framesProcessed} frames
+                  </span>
+                </div>
               )}
-            </AnimatePresence>
-          </motion.div>
+            </div>
 
-          {/* Estado / Acción */}
-          <AnimatePresence mode="wait">
-            {isProcessing ? (
-              <motion.div
-                key="proc"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="glass rounded-sm"
-              >
-                <ProcessingState
-                  label={PROGRESS_MESSAGES[msgIndex]}
-                  progress={progress > 0 ? Math.min(progress, 95) : undefined}
-                />
-                <p className="font-mono text-xs text-text-muted text-center pb-6">
-                  No cierres esta ventana — el procesamiento continúa en el servidor.
-                </p>
-              </motion.div>
+            {isActive && (
+              <div className="absolute bottom-[61px] left-0 right-0 z-20 px-4">
+                <div className="w-full bg-void/60 rounded-full h-1">
+                  <div
+                    className="bg-neon h-1 rounded-full transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
-            ) : status === "error" ? (
+            <div className="relative bg-void aspect-video">
+              <video
+                ref={videoRef}
+                className={cn(
+                  "w-full h-full object-contain",
+                  !isActive && !isDone && "opacity-0"
+                )}
+                muted
+                playsInline
+              />
+
+              <AnimatePresence>
+                {(isActive || isDone) && latestFrame?.annotated_frame && (
+                  <motion.img
+                    key={latestFrame.frame_index}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.05 }}
+                    src={`data:image/jpeg;base64,${latestFrame.annotated_frame}`}
+                    alt="Frame anotado"
+                    className="absolute inset-0 w-full h-full object-contain"
+                  />
+                )}
+              </AnimatePresence>
+
+              {status === "idle" && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                  <div className="p-5 rounded-sm bg-panel border border-border">
+                    <Video className="w-10 h-10 text-text-muted" />
+                  </div>
+                  <p className="font-display text-sm text-text-secondary">
+                    {file ? file.name : "Selecciona un video para comenzar"}
+                  </p>
+                </div>
+              )}
+
+              {isDone && !latestFrame?.annotated_frame && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-void/60">
+                  <p className="font-mono text-sm text-neon">✅ Procesamiento completado</p>
+                  <p className="font-mono text-xs text-text-muted">{framesProcessed} frames analizados</p>
+                </div>
+              )}
+            </div>
+
+            <canvas ref={canvasRef} className="hidden" />
+
+            <div className="flex items-center gap-3 p-4 border-t border-border">
+              {status === "idle" ? (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="video/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                    id="video-input"
+                  />
+                  <label
+                    htmlFor="video-input"
+                    className="btn-outline flex items-center gap-2 cursor-pointer px-4"
+                  >
+                    <Video className="w-4 h-4" />
+                    {file ? "Cambiar" : "Seleccionar video"}
+                  </label>
+                  <button
+                    onClick={handleStart}
+                    disabled={!file || !modelReady}
+                    className="btn-primary flex items-center gap-2 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {!modelReady
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Cargando modelo...</>
+                      : <><Play className="w-4 h-4" /> Iniciar análisis</>
+                    }
+                  </button>
+                </>
+              ) : isDone ? (
+                <button
+                  onClick={handleReset}
+                  className="btn-outline flex items-center gap-2 flex-1 justify-center"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Analizar otro video
+                </button>
+              ) : (
+                <>
+                  {isProcessing ? (
+                    <button
+                      onClick={pause}
+                      className="btn-outline flex items-center gap-2 flex-1 justify-center"
+                    >
+                      <Pause className="w-4 h-4" />
+                      Pausar
+                    </button>
+                  ) : (
+                    <button
+                      onClick={resume}
+                      className="btn-primary flex items-center gap-2 flex-1 justify-center"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Reanudar
+                    </button>
+                  )}
+                  <button
+                    onClick={handleReset}
+                    className="btn-outline flex items-center gap-2 px-4"
+                  >
+                    <Square className="w-4 h-4 text-danger" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <AnimatePresence>
+            {error && (
               <motion.div
-                key="err"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -278,103 +286,58 @@ export default function VideoPage() {
                   Intentar de nuevo
                 </button>
               </motion.div>
+            )}
+          </AnimatePresence>
 
-            ) : (
+          <AnimatePresence>
+            {(isActive || isDone) && latestFrame && (
               <motion.div
-                key="btns"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="flex gap-3"
+                className="glass rounded-sm px-4 py-3 grid grid-cols-3 gap-4"
               >
-                <button
-                  onClick={handleDetect}
-                  disabled={!file || !modelReady || isProcessing}
-                  className="btn-primary flex items-center gap-2 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {!modelReady
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Cargando modelo...</>
-                    : <><Zap className="w-4 h-4" /> Procesar Video</>
-                  }
-                </button>
-
-                {status === "done" && (
-                  <button onClick={handleReset} className="btn-outline flex items-center gap-2">
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                )}
+                {[
+                  { label: "Inferencia",   value: `${latestFrame.inference_ms.toFixed(0)}ms` },
+                  { label: "FPS servidor", value: fps                                         },
+                  { label: "Frames proc.", value: framesProcessed                             },
+                ].map(({ label, value }) => (
+                  <div key={label}>
+                    <p className="data-label">{label}</p>
+                    <p className="font-mono text-sm text-text-primary mt-0.5">{value}</p>
+                  </div>
+                ))}
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Columna derecha — Resultado */}
         <div className="space-y-4">
           <AnimatePresence mode="wait">
-            {status === "done" && result ? (
+            {latestFrame ? (
               <motion.div
-                key="res"
-                initial={{ opacity: 0, x: 16 }}
+                key="compliance"
+                initial={{ opacity: 0, x: 12 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0 }}
-                className="space-y-4"
               >
-                <div className="glass rounded-sm p-5 grid grid-cols-2 gap-x-6 gap-y-4">
-                  <div className="col-span-2 flex items-center gap-2 mb-1">
-                    <Film className="w-4 h-4 text-neon" />
-                    <span className="font-display font-semibold text-sm text-text-primary">
-                      Resumen del procesamiento
-                    </span>
-                  </div>
-
-                  {[
-                    { label: "Duración",          value: formatDuration(result.video_duration)  },
-                    { label: "Resolución",         value: `${result.video_width}×${result.video_height}` },
-                    { label: "FPS",                value: `${result.video_fps.toFixed(0)} fps`  },
-                    { label: "Frames analizados",  value: result.frames_processed               },
-                    { label: "Tiempo proceso",     value: `${result.processing_time_sec}s`      },
-                    { label: "Tamaño output",      value: `${(result.output_size_kb / 1024).toFixed(1)} MB` },
-                  ].map(({ label, value }) => (
-                    <div key={label}>
-                      <p className="data-label">{label}</p>
-                      <p className="font-mono text-sm text-text-primary mt-0.5">{value}</p>
-                    </div>
-                  ))}
-
-                  <div className="col-span-2 pt-2 border-t border-border/40">
-                    <a
-                      href={api.getDownloadUrl(result.job_id)}
-                      download={`epp_resultado_${result.job_id}.mp4`}
-                      className="btn-primary flex items-center gap-2 justify-center w-full"
-                    >
-                      <Download className="w-4 h-4" />
-                      Descargar Video Procesado
-                    </a>
-                    <p className="font-mono text-xs text-text-muted text-center mt-2">
-                      El archivo se elimina del servidor tras la descarga
-                    </p>
-                  </div>
-                </div>
-
-                <ComplianceCard compliance={result.compliance} />
+                <ComplianceCard compliance={latestFrame.compliance} />
               </motion.div>
-
             ) : (
               <motion.div
-                key="ph"
+                key="placeholder"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="glass rounded-sm flex flex-col items-center justify-center min-h-[420px] border border-dashed border-border"
+                className="glass rounded-sm flex flex-col items-center justify-center min-h-[360px] border border-dashed border-border"
               >
                 <div className="p-4 rounded-sm bg-panel border border-border mb-4">
-                  <Video className="w-8 h-8 text-text-muted" />
+                  <Activity className="w-8 h-8 text-text-muted" />
                 </div>
                 <p className="font-display text-sm text-text-secondary">
-                  El resultado aparecerá aquí
+                  Esperando frames...
                 </p>
                 <p className="font-mono text-xs text-text-muted mt-1">
-                  Sube un video corto (&lt;30s) y presiona Procesar
+                  Inicia el análisis para ver resultados EPP
                 </p>
               </motion.div>
             )}
