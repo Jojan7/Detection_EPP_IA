@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Image as ImageIcon, Zap, Download, RotateCcw } from "lucide-react"
+import { Image as ImageIcon, Zap, Download, RotateCcw, Loader2 } from "lucide-react"
 
 import { api } from "@/lib/api"
 import type { ImageDetectionResult, JobStatus } from "@/types/epp"
@@ -12,11 +12,37 @@ import { ComplianceCard } from "@/components/ui/ComplianceCard"
 import { ProcessingState } from "@/components/ui/ProcessingState"
 
 export default function ImagePage() {
-  const [file, setFile] = useState<File | null>(null)
-  const [status, setStatus] = useState<JobStatus>("idle")
-  const [result, setResult] = useState<ImageDetectionResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [progress, setProgress] = useState(0)
+  const [file,          setFile]          = useState<File | null>(null)
+  const [status,        setStatus]        = useState<JobStatus>("idle")
+  const [result,        setResult]        = useState<ImageDetectionResult | null>(null)
+  const [error,         setError]         = useState<string | null>(null)
+  const [progress,      setProgress]      = useState(0)
+  const [modelReady,    setModelReady]    = useState(false)
+  const [modelChecking, setModelChecking] = useState(true)
+  const healthInterval = useRef<NodeJS.Timeout | null>(null)
+
+  // Verificar que el modelo esté listo al cargar la página
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const h = await api.health()
+        if (h.model_ready) {
+          setModelReady(true)
+          setModelChecking(false)
+          if (healthInterval.current) clearInterval(healthInterval.current)
+        }
+      } catch {
+        // backend aún no responde, seguir intentando
+      }
+    }
+
+    checkHealth()
+    healthInterval.current = setInterval(checkHealth, 5000)
+
+    return () => {
+      if (healthInterval.current) clearInterval(healthInterval.current)
+    }
+  }, [])
 
   const handleFile = useCallback((f: File) => {
     setFile(f)
@@ -34,7 +60,6 @@ export default function ImagePage() {
 
     try {
       const res = await api.detectImage(file, setProgress)
-
       setResult(res)
       setStatus("done")
     } catch (e: any) {
@@ -53,7 +78,6 @@ export default function ImagePage() {
 
   const downloadAnnotated = () => {
     if (!result) return
-
     const a = document.createElement("a")
     a.href = `data:image/jpeg;base64,${result.image_b64}`
     a.download = `epp_resultado_${result.job_id}.jpg`
@@ -70,20 +94,35 @@ export default function ImagePage() {
       >
         <div className="flex items-center gap-2 mb-3">
           <ImageIcon className="w-4 h-4 text-neon" />
-
           <span className="font-mono text-xs text-text-muted tracking-widest uppercase">
             Detección en Imagen
           </span>
         </div>
-
         <h1 className="font-display text-3xl font-bold text-text-primary">
           Análisis EPP — Imagen
         </h1>
-
         <p className="font-body text-sm text-text-secondary mt-1">
           Sube una imagen para detectar los 5 EPP y verificar cumplimiento normativa.
         </p>
       </motion.div>
+
+      {/* Banner: modelo cargando */}
+      <AnimatePresence>
+        {modelChecking && !modelReady && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mb-6 glass rounded-sm px-4 py-3 flex items-center gap-3 border border-warn/30"
+          >
+            <Loader2 className="w-4 h-4 text-warn animate-spin flex-shrink-0" />
+            <p className="font-mono text-xs text-warn">
+              El modelo de IA está cargando en el servidor — esto toma ~60-90 segundos la primera vez.
+              El botón se habilitará automáticamente cuando esté listo.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Columna izquierda */}
@@ -96,10 +135,7 @@ export default function ImagePage() {
             <UploadZone
               accept="image"
               onFile={handleFile}
-              disabled={
-                status === "uploading" ||
-                status === "processing"
-              }
+              disabled={status === "uploading" || status === "processing"}
               className="min-h-[260px]"
             />
           </motion.div>
@@ -127,14 +163,8 @@ export default function ImagePage() {
                 exit={{ opacity: 0 }}
                 className="glass-danger rounded-sm p-4"
               >
-                <p className="font-mono text-sm text-danger">
-                  ⚠ {error}
-                </p>
-
-                <button
-                  onClick={handleReset}
-                  className="btn-outline mt-3 text-xs"
-                >
+                <p className="font-mono text-sm text-danger">⚠ {error}</p>
+                <button onClick={handleReset} className="btn-outline mt-3 text-xs">
                   Intentar de nuevo
                 </button>
               </motion.div>
@@ -149,29 +179,21 @@ export default function ImagePage() {
               >
                 <button
                   onClick={handleDetect}
-                  disabled={
-                    !file ||
-                    ["uploading", "processing"].includes(status)
-                  }
-                  className="btn-primary flex items-center gap-2 flex-1 justify-center"
+                  disabled={!file || !modelReady || ["uploading", "processing"].includes(status)}
+                  className="btn-primary flex items-center gap-2 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <Zap className="w-4 h-4" />
-                  Detectar EPP
+                  {!modelReady
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Cargando modelo...</>
+                    : <><Zap className="w-4 h-4" /> Detectar EPP</>
+                  }
                 </button>
 
                 {status === "done" && (
                   <>
-                    <button
-                      onClick={downloadAnnotated}
-                      className="btn-outline flex items-center gap-2"
-                    >
+                    <button onClick={downloadAnnotated} className="btn-outline flex items-center gap-2">
                       <Download className="w-4 h-4" />
                     </button>
-
-                    <button
-                      onClick={handleReset}
-                      className="btn-outline flex items-center gap-2"
-                    >
+                    <button onClick={handleReset} className="btn-outline flex items-center gap-2">
                       <RotateCcw className="w-4 h-4" />
                     </button>
                   </>
@@ -189,25 +211,13 @@ export default function ImagePage() {
                 className="glass rounded-sm p-4 grid grid-cols-3 gap-4"
               >
                 {[
-                  {
-                    label: "Inferencia",
-                    value: `${result.inference_ms}ms`,
-                  },
-                  {
-                    label: "Detecciones",
-                    value: result.boxes.length,
-                  },
-                  {
-                    label: "Job ID",
-                    value: result.job_id,
-                  },
+                  { label: "Inferencia",  value: `${result.inference_ms}ms` },
+                  { label: "Detecciones", value: result.boxes.length },
+                  { label: "Job ID",      value: result.job_id },
                 ].map(({ label, value }) => (
                   <div key={label}>
                     <p className="data-label">{label}</p>
-
-                    <p className="font-mono text-sm text-text-primary mt-0.5">
-                      {value}
-                    </p>
+                    <p className="font-mono text-sm text-text-primary mt-0.5">{value}</p>
                   </div>
                 ))}
               </motion.div>
@@ -226,7 +236,6 @@ export default function ImagePage() {
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                {/* Imagen anotada */}
                 <div className="glass rounded-sm overflow-hidden border border-border">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -234,12 +243,8 @@ export default function ImagePage() {
                     alt="Resultado anotado"
                     className="w-full object-contain max-h-80 bg-void"
                   />
-
                   <div className="px-4 py-2 border-t border-border flex items-center justify-between">
-                    <span className="data-label">
-                      Imagen procesada
-                    </span>
-
+                    <span className="data-label">Imagen procesada</span>
                     <button
                       onClick={downloadAnnotated}
                       className="font-mono text-xs text-neon hover:text-neon-dim flex items-center gap-1 transition-colors"
@@ -250,7 +255,6 @@ export default function ImagePage() {
                   </div>
                 </div>
 
-                {/* Compliance */}
                 <ComplianceCard compliance={result.compliance} />
               </motion.div>
 
@@ -265,11 +269,9 @@ export default function ImagePage() {
                 <div className="p-4 rounded-sm bg-panel border border-border mb-4">
                   <ImageIcon className="w-8 h-8 text-text-muted" />
                 </div>
-
                 <p className="font-display text-sm text-text-secondary">
                   El resultado aparecerá aquí
                 </p>
-
                 <p className="font-mono text-xs text-text-muted mt-1">
                   Sube una imagen y presiona Detectar
                 </p>

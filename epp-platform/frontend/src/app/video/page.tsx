@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Video, Zap, Download, RotateCcw,
-  Clock, Film, Gauge, ChevronDown, ChevronUp
+  Clock, Film, Gauge, ChevronDown, ChevronUp, Loader2
 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { VideoDetectionResult, JobStatus } from "@/types/epp"
@@ -13,8 +13,6 @@ import { ComplianceCard }  from "@/components/ui/ComplianceCard"
 import { ProcessingState } from "@/components/ui/ProcessingState"
 import { formatDuration }  from "@/lib/utils"
 
-// Mensajes de progreso simulados para la fase de procesamiento
-// (el backend no stream progreso via HTTP, solo al completar)
 const PROGRESS_MESSAGES = [
   "Analizando frames...",
   "Ejecutando inferencia YOLOv8...",
@@ -25,15 +23,41 @@ const PROGRESS_MESSAGES = [
 ]
 
 export default function VideoPage() {
-  const [file,       setFile]       = useState<File | null>(null)
-  const [status,     setStatus]     = useState<JobStatus>("idle")
-  const [result,     setResult]     = useState<VideoDetectionResult | null>(null)
-  const [error,      setError]      = useState<string | null>(null)
-  const [progress,   setProgress]   = useState(0)
-  const [msgIndex,   setMsgIndex]   = useState(0)
-  const [frameSkip,  setFrameSkip]  = useState(2)
-  const [showConfig, setShowConfig] = useState(false)
+  const [file,        setFile]        = useState<File | null>(null)
+  const [status,      setStatus]      = useState<JobStatus>("idle")
+  const [result,      setResult]      = useState<VideoDetectionResult | null>(null)
+  const [error,       setError]       = useState<string | null>(null)
+  const [progress,    setProgress]    = useState(0)
+  const [msgIndex,    setMsgIndex]    = useState(0)
+  const [frameSkip,   setFrameSkip]   = useState(2)
+  const [showConfig,  setShowConfig]  = useState(false)
+  const [modelReady,  setModelReady]  = useState(false)
+  const [modelChecking, setModelChecking] = useState(true)
   const msgInterval = useRef<NodeJS.Timeout | null>(null)
+  const healthInterval = useRef<NodeJS.Timeout | null>(null)
+
+  // Verificar que el modelo esté listo al cargar la página
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const h = await api.health()
+        if (h.model_ready) {
+          setModelReady(true)
+          setModelChecking(false)
+          if (healthInterval.current) clearInterval(healthInterval.current)
+        }
+      } catch {
+        // backend aún no responde, seguir intentando
+      }
+    }
+
+    checkHealth()
+    healthInterval.current = setInterval(checkHealth, 5000)
+
+    return () => {
+      if (healthInterval.current) clearInterval(healthInterval.current)
+    }
+  }, [])
 
   const handleFile = useCallback((f: File) => {
     setFile(f)
@@ -64,7 +88,6 @@ export default function VideoPage() {
 
     try {
       const res = await api.detectVideo(file, frameSkip, (pct) => {
-        // Upload es 0-30%, procesamiento 30-95% (simulado)
         setProgress(pct)
       })
       stopProgressMessages()
@@ -111,6 +134,24 @@ export default function VideoPage() {
           Procesa un video completo. Cada frame es analizado y el video anotado queda disponible para descarga.
         </p>
       </motion.div>
+
+      {/* Banner: modelo cargando */}
+      <AnimatePresence>
+        {modelChecking && !modelReady && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mb-6 glass rounded-sm px-4 py-3 flex items-center gap-3 border border-warn/30"
+          >
+            <Loader2 className="w-4 h-4 text-warn animate-spin flex-shrink-0" />
+            <p className="font-mono text-xs text-warn">
+              El modelo de IA está cargando en el servidor — esto toma ~60-90 segundos la primera vez.
+              El botón se habilitará automáticamente cuando esté listo.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="grid lg:grid-cols-2 gap-6">
 
@@ -160,7 +201,6 @@ export default function VideoPage() {
                   className="overflow-hidden"
                 >
                   <div className="px-4 pb-4 pt-1 border-t border-border/40 space-y-4">
-                    {/* Frame skip */}
                     <div>
                       <div className="flex justify-between items-center mb-2">
                         <label className="font-display text-sm text-text-secondary">
@@ -182,7 +222,6 @@ export default function VideoPage() {
                       </div>
                     </div>
 
-                    {/* Estimación */}
                     <div className="bg-panel rounded-sm px-3 py-2 flex items-center gap-2">
                       <Clock className="w-3.5 h-3.5 text-warn flex-shrink-0" />
                       <p className="font-mono text-xs text-text-secondary">
@@ -239,11 +278,13 @@ export default function VideoPage() {
               >
                 <button
                   onClick={handleDetect}
-                  disabled={!file}
-                  className="btn-primary flex items-center gap-2 flex-1 justify-center"
+                  disabled={!file || !modelReady || isProcessing}
+                  className="btn-primary flex items-center gap-2 flex-1 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <Zap className="w-4 h-4" />
-                  Procesar Video
+                  {!modelReady
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Cargando modelo...</>
+                    : <><Zap className="w-4 h-4" /> Procesar Video</>
+                  }
                 </button>
 
                 {status === "done" && (
@@ -267,7 +308,6 @@ export default function VideoPage() {
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                {/* Stats del video */}
                 <div className="glass rounded-sm p-5 grid grid-cols-2 gap-x-6 gap-y-4">
                   <div className="col-span-2 flex items-center gap-2 mb-1">
                     <Film className="w-4 h-4 text-neon" />
@@ -277,12 +317,12 @@ export default function VideoPage() {
                   </div>
 
                   {[
-                    { label: "Duración",       value: formatDuration(result.video_duration)  },
-                    { label: "Resolución",      value: `${result.video_width}×${result.video_height}` },
-                    { label: "FPS",             value: `${result.video_fps.toFixed(0)} fps`  },
-                    { label: "Frames analizados", value: result.frames_processed             },
-                    { label: "Tiempo proceso",  value: `${result.processing_time_sec}s`      },
-                    { label: "Tamaño output",   value: `${(result.output_size_kb / 1024).toFixed(1)} MB` },
+                    { label: "Duración",          value: formatDuration(result.video_duration)  },
+                    { label: "Resolución",         value: `${result.video_width}×${result.video_height}` },
+                    { label: "FPS",                value: `${result.video_fps.toFixed(0)} fps`  },
+                    { label: "Frames analizados",  value: result.frames_processed               },
+                    { label: "Tiempo proceso",     value: `${result.processing_time_sec}s`      },
+                    { label: "Tamaño output",      value: `${(result.output_size_kb / 1024).toFixed(1)} MB` },
                   ].map(({ label, value }) => (
                     <div key={label}>
                       <p className="data-label">{label}</p>
@@ -290,7 +330,6 @@ export default function VideoPage() {
                     </div>
                   ))}
 
-                  {/* Botón descarga */}
                   <div className="col-span-2 pt-2 border-t border-border/40">
                     <a
                       href={api.getDownloadUrl(result.job_id)}
@@ -306,7 +345,6 @@ export default function VideoPage() {
                   </div>
                 </div>
 
-                {/* Compliance card */}
                 <ComplianceCard compliance={result.compliance} />
               </motion.div>
 
