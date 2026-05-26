@@ -23,20 +23,19 @@ const PROGRESS_MESSAGES = [
 ]
 
 export default function VideoPage() {
-  const [file,        setFile]        = useState<File | null>(null)
-  const [status,      setStatus]      = useState<JobStatus>("idle")
-  const [result,      setResult]      = useState<VideoDetectionResult | null>(null)
-  const [error,       setError]       = useState<string | null>(null)
-  const [progress,    setProgress]    = useState(0)
-  const [msgIndex,    setMsgIndex]    = useState(0)
-  const [frameSkip,   setFrameSkip]   = useState(2)
-  const [showConfig,  setShowConfig]  = useState(false)
-  const [modelReady,  setModelReady]  = useState(false)
+  const [file,          setFile]          = useState<File | null>(null)
+  const [status,        setStatus]        = useState<JobStatus>("idle")
+  const [result,        setResult]        = useState<VideoDetectionResult | null>(null)
+  const [error,         setError]         = useState<string | null>(null)
+  const [progress,      setProgress]      = useState(0)
+  const [msgIndex,      setMsgIndex]      = useState(0)
+  const [frameSkip,     setFrameSkip]     = useState(4)   // FIX: default 4 para reducir tiempo
+  const [showConfig,    setShowConfig]    = useState(false)
+  const [modelReady,    setModelReady]    = useState(false)
   const [modelChecking, setModelChecking] = useState(true)
-  const msgInterval = useRef<NodeJS.Timeout | null>(null)
+  const msgInterval    = useRef<NodeJS.Timeout | null>(null)
   const healthInterval = useRef<NodeJS.Timeout | null>(null)
 
-  // Verificar que el modelo esté listo al cargar la página
   useEffect(() => {
     const checkHealth = async () => {
       try {
@@ -153,6 +152,18 @@ export default function VideoPage() {
         )}
       </AnimatePresence>
 
+      {/* Banner: limitación plan gratuito */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="mb-6 glass rounded-sm px-4 py-3 flex items-center gap-3 border border-border/40"
+      >
+        <Clock className="w-4 h-4 text-text-muted flex-shrink-0" />
+        <p className="font-mono text-xs text-text-muted">
+          Plan gratuito: videos cortos recomendados (&lt;30 segundos). Usa frame skip 4-5 para videos más largos.
+        </p>
+      </motion.div>
+
       <div className="grid lg:grid-cols-2 gap-6">
 
         {/* Columna izquierda */}
@@ -225,8 +236,8 @@ export default function VideoPage() {
                     <div className="bg-panel rounded-sm px-3 py-2 flex items-center gap-2">
                       <Clock className="w-3.5 h-3.5 text-warn flex-shrink-0" />
                       <p className="font-mono text-xs text-text-secondary">
-                        Videos largos pueden tardar varios minutos en CPU.
-                        Frame skip 2–3 es el mejor balance precisión/velocidad.
+                        En plan gratuito usa frame skip 4-5 y videos cortos (&lt;30s).
+                        Frame skip 4 es el mejor balance para CPU limitado.
                       </p>
                     </div>
                   </div>
@@ -363,7 +374,7 @@ export default function VideoPage() {
                   El resultado aparecerá aquí
                 </p>
                 <p className="font-mono text-xs text-text-muted mt-1">
-                  Sube un video y presiona Procesar
+                  Sube un video corto (&lt;30s) y presiona Procesar
                 </p>
               </motion.div>
             )}
