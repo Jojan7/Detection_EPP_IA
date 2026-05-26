@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 from app.api.routes import images, stream, videos
 from app.api.schemas import ErrorResponse, HealthResponse, ModelInfoResponse
 from app.core.config import (
-    ALLOWED_ORIGINS,
     ENVIRONMENT,
     EPP_REQUIRED,
     MODEL_CONFIDENCE,
@@ -49,10 +48,12 @@ app = FastAPI(
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# FIX: allow_origins=["*"] con allow_credentials=False
+# (credentials=True + wildcard es inválido en el estándar CORS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -61,15 +62,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    """
-    FIX Render: validate_config() y model_manager.load() arrancan el modelo
-    en background. El puerto queda abierto de inmediato para que Render
-    no haga timeout en el port scan.
-    """
     logger.info(f"Iniciando EPP AI API | Entorno: {ENVIRONMENT}")
     try:
         validate_config()
-        # load() ahora es no-bloqueante — lanza un thread y retorna al instante
         model_manager.load()
         logger.info("✅ API lista para recibir requests (modelo cargando en background)")
     except Exception as e:
